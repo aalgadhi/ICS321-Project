@@ -1,40 +1,38 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import { getAuthStatus, logout as apiLogout } from '../api/api'; // Rename logout import
+import { logout as apiLogout } from '../api/api';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // Load user from localStorage if available
+  const [user, setUser] = useState(() => {
+    const storedUser = localStorage.getItem('user');
+    return storedUser ? JSON.parse(storedUser) : null;
+  });
 
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Save user to localStorage whenever it changes
   useEffect(() => {
-    const checkAuthStatus = async () => {
-      try {
-        const data = await getAuthStatus();
-        setUser(data.user);
-      } catch (error) {
-        setUser(null); // Not logged in
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    checkAuthStatus();
-  }, []);
+    if (user) {
+      localStorage.setItem('user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('user');
+    }
+  }, [user]);
 
   const login = (userData) => {
     setUser(userData);
   };
 
   const logout = async () => {
-     try {
-         await apiLogout();
-         setUser(null);
-     } catch (error) {
-         console.error("Logout failed:", error);
-         // Optionally handle logout error, maybe still clear state
-         setUser(null);
-     }
-
+    try {
+      await apiLogout();
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+    setUser(null);
+    localStorage.removeItem('user');
   };
 
   return (

@@ -11,6 +11,7 @@ import HighestScorerPage from './pages/HighestScorerPage';
 import RedCardPage from './pages/RedCardPage';
 import TeamMembersPage from './pages/TeamMembersPage';
 import SignupPage from './pages/SignupPage';
+import UpcomingMatchesPage from './pages/UpcomingMatchesPage';
 
 
 const ProtectedRoute = ({ element, allowedRoles }) => {
@@ -68,6 +69,10 @@ function App() {
                 <Route
                 path="/guest/team-members/:teamId/:trId"
                 element={<ProtectedRoute element={<TeamMembersPage />} allowedRoles={['guest']} />}
+              />
+              <Route
+                path="/guest/upcoming-matches/:trId"
+                element={<ProtectedRoute element={<UpcomingMatchesPage />} allowedRoles={['guest']} />}
               />
 
 

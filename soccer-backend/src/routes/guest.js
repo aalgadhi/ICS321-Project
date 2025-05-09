@@ -1,13 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const authenticateToken = require('../middleware/auth');
+// const authenticateToken = require('../middleware/auth');
 
-router.use(authenticateToken); // Guests also need to be logged in based on project description (System login/logout)
+// router.use(authenticateToken); // Removed: Guests do not need to be logged in
 
 router.get('/tournaments', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM TOURNAMENT ORDER BY start_date');
+    const result = await pool.query('SELECT tr_id, tr_name FROM tournament ORDER BY tr_name');
+    if (result.rows.length === 0) {
+      console.warn('No tournaments found in the database.');
+    }
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching tournaments:', error);
@@ -15,12 +18,15 @@ router.get('/tournaments', async (req, res) => {
   }
 });
 
+// NOTE: The match_played table must have a tr_id column referencing tournament.tr_id for tournament filtering to work.
+// If you get an error about mp.tr_id not existing, you must add this column to your schema.
 router.get('/tournaments/:trId/matches', async (req, res) => {
   const { trId } = req.params;
   try {
     const result = await pool.query(`
       SELECT
           mp.match_no,
+          mp.tr_id,
           mp.play_stage,
           mp.play_date,
           t1.team_name AS team1_name,
@@ -31,17 +37,17 @@ router.get('/tournaments/:trId/matches', async (req, res) => {
           mp.audience,
           p.name AS player_of_match_name
       FROM
-          MATCH_PLAYED mp
-      JOIN
-          TEAM t1 ON mp.team_id1 = t1.team_id
-      JOIN
-          TEAM t2 ON mp.team_id2 = t2.team_id
-      JOIN
-          VENUE v ON mp.venue_id = v.venue_id
+          match_played mp
       LEFT JOIN
-          PLAYER pl ON mp.player_of_match = pl.player_id
+          team t1 ON mp.team_id1 = t1.team_id
       LEFT JOIN
-          PERSON p ON pl.player_id = p.kfupm_id
+          team t2 ON mp.team_id2 = t2.team_id
+      LEFT JOIN
+          venue v ON mp.venue_id = v.venue_id
+      LEFT JOIN
+          player pl ON mp.player_of_match = pl.player_id
+      LEFT JOIN
+          person p ON pl.player_id = p.kfupm_id
       WHERE
           mp.tr_id = $1
       ORDER BY
@@ -50,7 +56,7 @@ router.get('/tournaments/:trId/matches', async (req, res) => {
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching match results:', error);
-    res.status(500).json({ message: 'Error fetching match results' });
+    res.status(500).json({ message: 'Error fetching match results.' });
   }
 });
 
@@ -94,6 +100,7 @@ router.get('/teams/red-cards', async (req, res) => {
           p.kfupm_id AS player_id,
           p.name AS player_name,
           mp.match_no,
+          mp.tr_id,
           mp.play_date
       FROM
           PLAYER_BOOKED pb
@@ -104,13 +111,12 @@ router.get('/teams/red-cards', async (req, res) => {
       JOIN
           PERSON p ON pl.player_id = p.kfupm_id
       JOIN
-          MATCH_PLAYED mp ON pb.match_no = mp.match_no
+          MATCH_PLAYED mp ON pb.match_no = mp.match_no AND pb.tr_id = mp.tr_id
       WHERE
           pb.sent_off = 'Y'
       ORDER BY
           t.team_name, mp.play_date;
     `);
-
     // Group by team name for better display
     const teamsWithRedCards = result.rows.reduce((acc, row) => {
         const team = acc.find(t => t.team_id === row.team_id);
@@ -118,14 +124,13 @@ router.get('/teams/red-cards', async (req, res) => {
             acc.push({
                 team_id: row.team_id,
                 team_name: row.team_name,
-                players: [{ player_id: row.player_id, player_name: row.player_name, match_no: row.match_no, match_date: row.play_date }]
+                players: [{ player_id: row.player_id, player_name: row.player_name, match_no: row.match_no, tr_id: row.tr_id, match_date: row.play_date }]
             });
         } else {
-            team.players.push({ player_id: row.player_id, player_name: row.player_name, match_no: row.match_no, match_date: row.play_date });
+            team.players.push({ player_id: row.player_id, player_name: row.player_name, match_no: row.match_no, tr_id: row.tr_id, match_date: row.play_date });
         }
         return acc;
     }, []);
-
     res.json(teamsWithRedCards);
   } catch (error) {
     console.error('Error fetching red card players:', error);
@@ -140,63 +145,81 @@ router.get('/teams/:teamId/:trId/members', async (req, res) => {
         // Get Players
         const playersResult = await pool.query(`
             SELECT p.kfupm_id, p.name, 'Player' as role
-            FROM TEAM_PLAYER tp
-            JOIN PLAYER pl ON tp.player_id = pl.player_id
-            JOIN PERSON p ON pl.player_id = p.kfupm_id
+            FROM team_player tp
+            JOIN player pl ON tp.player_id = pl.player_id
+            JOIN person p ON pl.player_id = p.kfupm_id
             WHERE tp.team_id = $1 AND tp.tr_id = $2
         `, [teamId, trId]);
 
-         // Get Support Staff (Coach, Asst Coach, Manager)
+        // Get Support Staff (Coach, Asst Coach, Manager, etc.)
         const supportResult = await pool.query(`
             SELECT p.kfupm_id, p.name, s.support_desc as role
-            FROM TEAM_SUPPORT ts
-            JOIN PERSON p ON ts.support_id = p.kfupm_id
-            JOIN SUPPORT s ON ts.support_type = s.support_type
-            WHERE ts.team_id = $1 AND ts.tr_id = $2 AND ts.support_type IN ('CH', 'AC', 'MG')
+            FROM team_support ts
+            JOIN person p ON ts.support_id = p.kfupm_id
+            JOIN support s ON ts.support_type = s.support_type
+            WHERE ts.team_id = $1 AND ts.tr_id = $2
         `, [teamId, trId]);
 
-        // Get Captain (if one is set using the is_captain flag we added)
-         const captainResult = await pool.query(`
-             SELECT p.kfupm_id, p.name, 'Captain' as role
-             FROM TEAM_PLAYER tp
-             JOIN PLAYER pl ON tp.player_id = pl.player_id
-             JOIN PERSON p ON pl.player_id = p.kfupm_id
-             WHERE tp.team_id = $1 AND tp.tr_id = $2 AND tp.is_captain = true
-         `, [teamId, trId]);
-
-        // Combine results - ensure no duplicates for captain if they are also listed as player
-        const members = [...supportResult.rows];
-        const captain = captainResult.rows[0]; // Assuming max one captain per team/tournament
-
-        playersResult.rows.forEach(player => {
-            // Add player if not the captain
-            if (!captain || player.kfupm_id !== captain.kfupm_id) {
-                 members.push(player);
-            }
-        });
-
-        if (captain) {
-            // Add captain first or ensure they are marked as captain
-             // Find if captain was also listed in support (e.g., Player-Coach) and update role
-             const existingCaptainIndex = members.findIndex(m => m.kfupm_id === captain.kfupm_id);
-             if(existingCaptainIndex !== -1) {
-                 // Could concatenate roles or just mark as captain
-                 members[existingCaptainIndex].role = 'Captain (' + members[existingCaptainIndex].role + ')';
-             } else {
-                 // If captain wasn't in support or player list initially (shouldn't happen with this schema), add them
-                 // This path is unlikely if the captain is also a PLAYER.
-                  members.push(captain);
-             }
-        }
-
-
+        // Combine results
+        const members = [...playersResult.rows, ...supportResult.rows];
         res.json(members);
-
     } catch (error) {
         console.error('Error fetching team members:', error);
         res.status(500).json({ message: 'Error fetching team members' });
     }
 });
 
+// Get all teams
+router.get('/teams', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT team_id, team_name FROM team ORDER BY team_name');
+    if (result.rows.length === 0) {
+      console.warn('No teams found in the database.');
+    }
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching teams:', error);
+    res.status(500).json({ message: 'Error fetching teams' });
+  }
+});
+
+// Add: Endpoint for next matches in a tournament
+router.get('/tournaments/:trId/next-matches', async (req, res) => {
+  const { trId } = req.params;
+  try {
+    const result = await pool.query(`
+      SELECT
+        nm.match_no,
+        nm.tr_id,
+        nm.play_date,
+        nm.play_stage,
+        v.venue_name,
+        t1.team_name AS team1_name,
+        t2.team_name AS team2_name
+      FROM
+        next_match nm
+      LEFT JOIN team t1 ON nm.team_id1 = t1.team_id
+      LEFT JOIN team t2 ON nm.team_id2 = t2.team_id
+      LEFT JOIN venue v ON nm.venue_id = v.venue_id
+      WHERE nm.tr_id = $1
+      ORDER BY nm.play_date;
+    `, [trId]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching next matches:', error);
+    res.status(500).json({ message: 'Error fetching next matches.' });
+  }
+});
+
+// Get all venues
+router.get('/venues', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT venue_id, venue_name FROM venue ORDER BY venue_name');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching venues:', error);
+    res.status(500).json({ message: 'Error fetching venues' });
+  }
+});
 
 module.exports = router;

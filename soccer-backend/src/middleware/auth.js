@@ -1,23 +1,29 @@
 const pool = require('../db');
+const userQueries = require('../queries');
 
 const authenticateToken = async (req, res, next) => {
-  const userId = req.session.userId;
-  if (!userId) {
-    return res.sendStatus(401); // Unauthorized
-  }
-  try {
-    // This is line 8. Ensure it matches exactly, including the $1 placeholder.
-    const result = await pool.query('SELECT * FROM USERS WHERE kfupm_id = $1', [userId]);
-    if (result.rows.length > 0) {
-      req.user = result.rows[0]; // Attach user info to request
-      next();
-    } else {
-      res.sendStatus(403); // Forbidden (user not found in DB)
+    const sessionId = req.sessionID;
+    if (!sessionId) {
+        return res.status(401).json({ message: 'No session found' });
     }
-  } catch (error) {
-    console.error('Authentication error:', error);
-    res.sendStatus(500); // Internal Server Error
-  }
+
+    try {
+        const activeSession = await userQueries.getActiveSession(sessionId);
+        if (!activeSession) {
+            return res.status(401).json({ message: 'Session expired or invalid' });
+        }
+
+        const user = await userQueries.getUserByUsername(activeSession.username);
+        if (!user || user.is_active !== 'Y') {
+            return res.status(401).json({ message: 'User not found or inactive' });
+        }
+
+        req.user = user;
+        next();
+    } catch (error) {
+        console.error('Authentication error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
 };
 
 module.exports = authenticateToken;

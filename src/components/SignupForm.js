@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 
 const SignupForm = () => {
   const [formData, setFormData] = useState({
-    kfupm_id: '', // Add kfupm_id to state
-    name: '',
+    kfupm_id: '',
+    full_name: '',
     date_of_birth: '',
     username: '',
     password: '',
@@ -24,14 +24,19 @@ const SignupForm = () => {
     setError('');
     setMessage('');
     try {
-      await registerUser(formData); // formData now includes kfupm_id
+      await registerUser(formData);
       setMessage('Signup successful! Please login.');
       setFormData({
-         kfupm_id: '', name: '', date_of_birth: '', username: '', password: ''
-      }); // Clear form
+        kfupm_id: '',
+        full_name: '',
+        date_of_birth: '',
+        username: '',
+        password: ''
+      });
       navigate('/login');
     } catch (err) {
-      setError(err.message);
+      console.error('Signup error:', err);
+      setError(err.message || 'Failed to sign up. Please try again.');
     }
   };
 
@@ -40,30 +45,30 @@ const SignupForm = () => {
       <h2 className="mb-3">Signup</h2>
       <form onSubmit={handleSubmit}>
         <div className="mb-3">
-           <label htmlFor="kfupmIdInput" className="form-label">KFUPM ID:</label> {/* Add new input */}
-           <input
-             type="number" // Use number type for numeric ID
-             className="form-control"
-             id="kfupmIdInput"
-             name="kfupm_id"
-             value={formData.kfupm_id}
-             onChange={handleChange}
-             required
-           />
-         </div>
-        <div className="mb-3">
-          <label htmlFor="nameInput" className="form-label">Full Name:</label>
+          <label htmlFor="kfupmIdInput" className="form-label">KFUPM ID:</label>
           <input
-            type="text"
+            type="number"
             className="form-control"
-            id="nameInput"
-            name="name"
-            value={formData.name}
+            id="kfupmIdInput"
+            name="kfupm_id"
+            value={formData.kfupm_id}
             onChange={handleChange}
             required
           />
         </div>
-         <div className="mb-3">
+        <div className="mb-3">
+          <label htmlFor="fullNameInput" className="form-label">Full Name:</label>
+          <input
+            type="text"
+            className="form-control"
+            id="fullNameInput"
+            name="full_name"
+            value={formData.full_name}
+            onChange={handleChange}
+            required
+          />
+        </div>
+        <div className="mb-3">
           <label htmlFor="dobInput" className="form-label">Date of Birth:</label>
           <input
             type="date"

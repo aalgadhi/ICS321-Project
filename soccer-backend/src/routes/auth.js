@@ -1,89 +1,142 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const authenticateToken = require('../middleware/auth');
-const bcrypt = require('bcrypt');
+const userQueries = require('../queries');
 
-router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  try {
-    const result = await pool.query('SELECT * FROM USERS WHERE username = $1', [username]);
-    if (result.rows.length > 0) {
-      const user = result.rows[0];
-      const passwordMatch = await bcrypt.compare(password, user.password);
-
-      if (passwordMatch) {
-          req.session.userId = user.kfupm_id;
-          req.session.role = user.role;
-          res.json({ message: 'Login successful', user: { id: user.kfupm_id, username: user.username, role: user.role } });
-      } else {
-           res.status(401).json({ message: 'Invalid credentials' });
-      }
-    } else {
-      res.status(401).json({ message: 'Invalid credentials' });
-    }
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
-});
-
-router.post('/logout', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      console.error('Logout error:', err);
-      return res.status(500).json({ message: 'Logout failed' });
-    }
-    res.json({ message: 'Logout successful' });
-  });
-});
-
-router.get('/status', authenticateToken, (req, res) => {
-    res.json({ isLoggedIn: true, user: { id: req.user.kfupm_id, username: req.user.username, role: req.user.role } });
-});
-
+// Signup route
 router.post('/signup', async (req, res) => {
-    const { kfupm_id, name, date_of_birth, username, password } = req.body; // Expect kfupm_id from body
-    const client = await pool.connect();
+    const { username, password, kfupm_id, full_name, date_of_birth } = req.body;
+    
     try {
-        await client.query('BEGIN');
+        console.log('Received signup request with data:', {
+            username,
+            kfupm_id,
+            full_name,
+            date_of_birth,
+            password_length: password ? password.length : 0
+        });
+        
+        const user = await userQueries.createUser({
+            username,
+            password,
+            kfupm_id,
+            full_name,
+            date_of_birth
+        });
 
-        const saltRounds = 10;
-        const hashedPassword = await bcrypt.hash(password, saltRounds);
-
-        // Insert into PERSON table, INCLUDING kfupm_id from the body
-        const personResult = await client.query(
-            'INSERT INTO PERSON (kfupm_id, name, date_of_birth) VALUES ($1, $2, $3) RETURNING kfupm_id', // Return ID to confirm insertion
-            [kfupm_id, name, date_of_birth]
-        );
-        const newPersonId = personResult.rows[0].kfupm_id; // Get the ID that was just inserted
-
-        // Insert into USERS table using the provided kfupm_id
-        const userResult = await client.query(
-            'INSERT INTO USERS (kfupm_id, username, password, role) VALUES ($1, $2, $3, $4) RETURNING kfupm_id, username, role',
-            [newPersonId, username, hashedPassword, 'guest']
-        );
-
-        await client.query('COMMIT');
-
-        res.status(201).json({ message: 'User registered successfully', user: userResult.rows[0] });
+        res.status(201).json({ 
+            message: 'User registered successfully', 
+            user: {
+                username: user.username,
+                kfupm_id: user.kfupm_id,
+                full_name: user.full_name
+            }
+        });
 
     } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Signup error:', error);
+        console.error('Signup error details:', {
+            message: error.message,
+            detail: error.detail,
+            constraint: error.constraint,
+            code: error.code,
+            stack: error.stack,
+            table: error.table,
+            schema: error.schema
+        });
+        
         // Check for unique violation errors
-        if (error.constraint === 'person_pkey' || error.constraint === 'users_kfupm_id_fkey') { // person_pkey if kfupm_id exists in PERSON
-             res.status(409).json({ message: `User with KFUPM ID ${kfupm_id} already exists.` });
-        } else if (error.constraint === 'users_username_key') { // users_username_key if username exists in USERS
-             res.status(409).json({ message: `Username "${username}" already exists.` });
+        if (error.constraint === 'user_account_pkey') {
+            res.status(409).json({ message: `Username "${username}" already exists.` });
+        } else if (error.constraint === 'user_account_kfupm_id_key') {
+            res.status(409).json({ message: `KFUPM ID ${kfupm_id} is already registered.` });
+        } else {
+            res.status(500).json({ 
+                message: 'Error registering user', 
+                error: error.detail || error.message 
+            });
         }
-         else {
-             res.status(500).json({ message: 'Error registering user', error: error.detail || error.message });
-        }
-    } finally {
-        client.release();
     }
 });
 
+// Login route
+router.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        const user = await userQueries.getUserByUsername(username);
+        
+        if (!user) {
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+
+        // Simple password comparison
+        if (password !== user.password) {
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+
+        // Only 'admin' is treated as admin, all others are 'guest'
+        const userRole = user.role === 'admin' ? 'admin' : 'guest';
+
+        // Return user info (excluding password)
+        const { password: _, ...userInfo } = user;
+        res.json({ 
+            message: 'Login successful', 
+            user: { ...userInfo, role: userRole }
+        });
+
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// Get current user info
+router.get('/me', async (req, res) => {
+    try {
+        const { password, ...userInfo } = req.user;
+        res.json(userInfo);
+    } catch (error) {
+        console.error('Error getting user info:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// Update user profile
+router.put('/profile', async (req, res) => {
+    const { full_name, date_of_birth } = req.body;
+    try {
+        const result = await pool.query(
+            `UPDATE USER_ACCOUNT 
+            SET full_name = $1, date_of_birth = $2 
+            WHERE username = $3 
+            RETURNING username, kfupm_id, full_name, date_of_birth`,
+            [full_name, date_of_birth, req.user.username]
+        );
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Error updating profile:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// Change password
+router.put('/password', async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    try {
+        // Verify current password
+        if (currentPassword !== req.user.password) {
+            return res.status(401).json({ message: 'Current password is incorrect' });
+        }
+
+        // Update password
+        await pool.query(
+            'UPDATE USER_ACCOUNT SET password = $1 WHERE username = $2',
+            [newPassword, req.user.username]
+        );
+        res.json({ message: 'Password updated successfully' });
+    } catch (error) {
+        console.error('Error changing password:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
 
 module.exports = router;

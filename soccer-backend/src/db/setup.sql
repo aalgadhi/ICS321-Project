@@ -1,0 +1,9 @@
+-- Create USER_SESSION table
+CREATE TABLE IF NOT EXISTS USER_SESSION (
+    session_id VARCHAR(255) PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    logout_time TIMESTAMP,
+    is_active CHAR(1) DEFAULT 'Y',
+    FOREIGN KEY (username) REFERENCES USER_ACCOUNT(username)
+); 
